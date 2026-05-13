@@ -15,31 +15,12 @@ const profileRoutes = require('./routes/profile.routes');
 
 const app = express();
 
-const configuredOrigins = [
-  process.env.FRONTEND_URL,
-  process.env.CLIENT_URL,
-]
-  .filter(Boolean)
-  .flatMap((value) => value.split(','))
-  .map((value) => value.trim())
-  .filter(Boolean);
-
-const allowedOrigins = new Set([
-  'http://localhost:5173',
-  'http://localhost:5174',
-  ...configuredOrigins,
-]);
-
 app.set('trust proxy', 1);
 
 app.use(helmet());
 app.use(cors({
   origin(origin, callback) {
-    if (!origin || allowedOrigins.has(origin)) {
-      return callback(null, true);
-    }
-
-    return callback(new Error(`CORS blocked for origin: ${origin}`));
+    return callback(null, origin || true);
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
