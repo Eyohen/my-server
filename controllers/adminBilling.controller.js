@@ -44,10 +44,24 @@ const getInvoiceInclude = () => [
   },
 ];
 
-const buildInvoiceNumber = async () => {
-  const count = await Invoice.count();
-  const serial = String(count + 1).padStart(5, '0');
-  return `SPI-${new Date().getFullYear()}-${serial}`;
+const buildInvoiceNumber = async (offset = 1) => {
+  const year = new Date().getFullYear();
+  const prefix = `SPI-${year}-`;
+  const invoices = await Invoice.findAll({
+    attributes: ['invoiceNumber'],
+    where: {
+      invoiceNumber: {
+        [Op.like]: `${prefix}%`,
+      },
+    },
+  });
+
+  const highestSerial = invoices.reduce((highest, invoice) => {
+    const serial = Number(invoice.invoiceNumber.replace(prefix, ''));
+    return Number.isInteger(serial) ? Math.max(highest, serial) : highest;
+  }, 0);
+
+  return `${prefix}${String(highestSerial + offset).padStart(5, '0')}`;
 };
 
 const validateInvoiceInput = ({ userId, title, amount, status }) => {
@@ -201,8 +215,7 @@ exports.createInvoice = async (req, res) => {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    const invoice = await Invoice.create({
-      invoiceNumber: req.body.invoiceNumber?.trim() || await buildInvoiceNumber(),
+    const invoicePayload = {
       userId: req.body.userId,
       title: req.body.title.trim(),
       amount: Number(req.body.amount).toFixed(2),
@@ -211,7 +224,25 @@ exports.createInvoice = async (req, res) => {
       issuedDate: req.body.issuedDate || new Date().toISOString().slice(0, 10),
       dueDate: req.body.dueDate || null,
       notes: req.body.notes?.trim() || null,
-    });
+    };
+
+    const manualInvoiceNumber = req.body.invoiceNumber?.trim();
+    let invoice;
+
+    for (let attempt = 1; attempt <= 5; attempt += 1) {
+      try {
+        invoice = await Invoice.create({
+          ...invoicePayload,
+          invoiceNumber: manualInvoiceNumber || await buildInvoiceNumber(attempt),
+        });
+        break;
+      } catch (error) {
+        const isDuplicate = error.name === 'SequelizeUniqueConstraintError';
+        if (!isDuplicate || manualInvoiceNumber || attempt === 5) {
+          throw error;
+        }
+      }
+    }
 
     const savedInvoice = await Invoice.findByPk(invoice.id, { include: getInvoiceInclude() });
 
