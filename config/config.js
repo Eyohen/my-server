@@ -2,11 +2,6 @@ require('dotenv').config();
 
 module.exports = {
   development: {
-    // username: process.env.DB_USER || 'postgres',
-    // password: process.env.DB_PASSWORD || 'postgres',
-    // database: process.env.DB_NAME || 'creatorsworld_dev',
-    // host: process.env.DB_HOST || '127.0.0.1',
-    // port: process.env.DB_PORT || 5432,
     username: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
     database: process.env.DB_NAME,
@@ -21,7 +16,7 @@ module.exports = {
     //   }
     // },
     pool: {
-      max: Number(process.env.DB_POOL_MAX || 2),
+      max: Number(process.env.DB_POOL_MAX || 5),
       min: Number(process.env.DB_POOL_MIN || 0),
       acquire: Number(process.env.DB_POOL_ACQUIRE || 20000),
       idle: Number(process.env.DB_POOL_IDLE || 5000),

@@ -44,6 +44,12 @@ const users = [
     lastName: 'Transcript',
     phone: '+2348010001006',
   },
+  {
+    email: 'henry.eyo2@gmail.com',
+    firstName: 'Henry',
+    lastName: 'Eyo',
+    phone: '+2348010001007',
+  },
 ];
 
 const seedUsers = async () => {

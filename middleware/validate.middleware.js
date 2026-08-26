@@ -29,9 +29,10 @@ const validations = {
       .normalizeEmail()
       .withMessage('Valid email is required'),
     body('phone')
+      .optional({ checkFalsy: true })
       .trim()
       .isLength({ min: 6, max: 30 })
-      .withMessage('Phone number is required and must be 30 characters or fewer'),
+      .withMessage('Phone number must be between 6 and 30 characters'),
     body('password')
       .isLength({ min: 8 })
       .withMessage('Password must be at least 8 characters')
