@@ -102,72 +102,39 @@ const validateInvoiceInput = ({ userId, title, amount, status }) => {
   return null;
 };
 
-const toDateKey = (date) => date.toISOString().slice(0, 10);
-
-const getLastSevenDays = () => {
-  const days = [];
-  const today = new Date();
-
-  for (let index = 6; index >= 0; index -= 1) {
-    const date = new Date(today);
-    date.setDate(today.getDate() - index);
-    days.push({
-      key: toDateKey(date),
-      day: date.toLocaleDateString('en-US', { weekday: 'short' }),
-    });
-  }
-
-  return days;
-};
-
 exports.getDashboard = async (req, res) => {
   try {
-    const days = getLastSevenDays();
-    const startDate = `${days[0].key}T00:00:00.000Z`;
-
     const [
       totalUsers,
       activeUsers,
+      accountTypeCounts,
       pendingUsers,
       totalInvoices,
       openInvoices,
       paidInvoices,
       overdueInvoices,
-      recentInvoices,
     ] = await Promise.all([
       User.count(),
       User.count({ where: { status: 'active' } }),
+      db.sequelize.query(`
+        SELECT
+          COUNT(*) FILTER (WHERE "userType"::text IN ('personal', 'creator')) AS personal,
+          COUNT(*) FILTER (WHERE "userType"::text IN ('business', 'brand')) AS business
+        FROM "Users"
+      `, {
+        type: db.Sequelize.QueryTypes.SELECT,
+        plain: true,
+      }),
       User.count({ where: { status: 'pending_verification' } }),
       Invoice.count(),
       Invoice.findAll({ where: { status: { [Op.in]: ['open', 'overdue'] } } }),
       Invoice.findAll({ where: { status: 'paid' } }),
       Invoice.findAll({ where: { status: 'overdue' } }),
-      Invoice.findAll({
-        where: {
-          createdAt: {
-            [Op.gte]: new Date(startDate),
-          },
-        },
-        attributes: ['amount', 'status', 'createdAt'],
-      }),
     ]);
 
     const openRevenue = openInvoices.reduce((sum, invoice) => sum + Number(invoice.amount || 0), 0);
     const paidRevenue = paidInvoices.reduce((sum, invoice) => sum + Number(invoice.amount || 0), 0);
     const overdueRevenue = overdueInvoices.reduce((sum, invoice) => sum + Number(invoice.amount || 0), 0);
-
-    const chart = days.map((day) => {
-      const invoicesForDay = recentInvoices.filter((invoice) => toDateKey(invoice.createdAt) === day.key);
-      const revenue = invoicesForDay
-        .filter((invoice) => invoice.status === 'paid')
-        .reduce((sum, invoice) => sum + Number(invoice.amount || 0), 0);
-
-      return {
-        day: day.day,
-        revenue,
-        invoices: invoicesForDay.length,
-      };
-    });
 
     const alerts = [];
     if (overdueInvoices.length > 0) {
@@ -197,7 +164,10 @@ exports.getDashboard = async (req, res) => {
           overdueInvoiceCount: overdueInvoices.length,
           overdueRevenue,
         },
-        chart,
+        accountTypes: {
+          personal: Number(accountTypeCounts?.personal || 0),
+          business: Number(accountTypeCounts?.business || 0),
+        },
         alerts,
       },
     });

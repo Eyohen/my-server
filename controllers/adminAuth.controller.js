@@ -2,7 +2,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const db = require('../models');
 
-const { Admin, User, PersonalProfile } = db;
+const { Admin, User, PersonalProfile, BusinessProfile } = db;
 const ACCESS_TOKEN_EXPIRY = '8h';
 
 const toPublicAdmin = (admin) => ({
@@ -125,6 +125,11 @@ exports.getUsers = async (req, res) => {
           as: 'personalProfile',
           required: false,
         },
+        {
+          model: BusinessProfile,
+          as: 'businessProfile',
+          required: false,
+        },
       ],
       order: [['createdAt', 'DESC']],
     });
@@ -134,7 +139,9 @@ exports.getUsers = async (req, res) => {
       data: {
         users: users.map((user) => {
           const profile = user.personalProfile;
-          const name = [profile?.firstName, profile?.lastName].filter(Boolean).join(' ') || user.email;
+          const businessProfile = user.businessProfile;
+          const personalName = [profile?.firstName, profile?.lastName].filter(Boolean).join(' ');
+          const name = businessProfile?.businessName || personalName || user.email;
 
           return {
             id: user.id,
@@ -142,8 +149,8 @@ exports.getUsers = async (req, res) => {
             name,
             firstName: profile?.firstName || '',
             lastName: profile?.lastName || '',
-            phone: profile?.phone || '',
-            workspace: profile?.displayName || `${name}'s workspace`,
+            phone: profile?.phone || businessProfile?.phone || '',
+            workspace: businessProfile?.businessName || profile?.displayName || `${name}'s workspace`,
             userType: user.userType,
             status: user.status,
             verified: user.verified,

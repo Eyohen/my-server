@@ -17,6 +17,7 @@
     "db:fresh": "npm run db:migrate:undo:all && npm run db:migrate",
     "admin:ensure": "node scripts/ensureAdmin.js",
     "users:seed": "node scripts/seedSpilightUsers.js",
+    "businesses:seed": "node scripts/seedBusinessAccounts.js",
     "billing:ensure": "node scripts/ensureBilling.js"
   },
   "keywords": [
