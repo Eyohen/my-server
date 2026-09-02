@@ -223,9 +223,9 @@ module.exports = {
         COALESCE(NULLIF(c."displayName", ''), CONCAT_WS(' ', c."firstName", c."lastName")),
         c.bio,
         c.phone,
-        COALESCE(c."onboardingStep", 1),
-        COALESCE(c."onboardingCompleted", false),
-        c."onboardingCompletedAt",
+        COALESCE(u."onboardingStep", 1),
+        COALESCE(u."onboardingCompleted", false),
+        CASE WHEN COALESCE(u."onboardingCompleted", false) THEN NOW() ELSE NULL END,
         NOW(),
         NOW()
       FROM "Creators" c
@@ -247,9 +247,9 @@ module.exports = {
         b.phone,
         b.website,
         b.description,
-        COALESCE(b."onboardingStep", 1),
-        COALESCE(b."onboardingCompleted", false),
-        b."onboardingCompletedAt",
+        COALESCE(u."onboardingStep", 1),
+        COALESCE(u."onboardingCompleted", false),
+        CASE WHEN COALESCE(u."onboardingCompleted", false) THEN NOW() ELSE NULL END,
         NOW(),
         NOW()
       FROM "Brands" b
