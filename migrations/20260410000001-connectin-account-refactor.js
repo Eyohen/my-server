@@ -210,9 +210,6 @@ module.exports = {
       },
     });
 
-    await queryInterface.addIndex('PersonalProfiles', ['userId'], { unique: true });
-    await queryInterface.addIndex('BusinessProfiles', ['userId'], { unique: true });
-
     await queryInterface.sequelize.query(`
       INSERT INTO "PersonalProfiles" (
         id, "userId", "firstName", "lastName", "displayName", bio, phone,
@@ -263,8 +260,6 @@ module.exports = {
   },
 
   async down(queryInterface) {
-    await queryInterface.removeIndex('BusinessProfiles', ['userId']);
-    await queryInterface.removeIndex('PersonalProfiles', ['userId']);
     await queryInterface.dropTable('BusinessProfiles');
     await queryInterface.dropTable('PersonalProfiles');
 
