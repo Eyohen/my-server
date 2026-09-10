@@ -1,6 +1,6 @@
 const db = require('../models');
 
-const { Invoice } = db;
+const { Invoice, Receipt } = db;
 
 const formatInvoice = (invoice) => ({
   id: invoice.id,
@@ -52,5 +52,34 @@ exports.getBillingSummary = async (req, res) => {
       success: false,
       message: 'Unable to load billing information',
     });
+  }
+};
+
+exports.getReceipts = async (req, res) => {
+  try {
+    const receipts = await Receipt.findAll({
+      where: { userId: req.userId },
+      order: [['paidDate', 'DESC'], ['createdAt', 'DESC']],
+    });
+
+    return res.json({
+      success: true,
+      data: {
+        receipts: receipts.map((receipt) => ({
+          id: receipt.id,
+          receiptNumber: receipt.receiptNumber,
+          customerName: receipt.customerName,
+          customerEmail: receipt.customerEmail,
+          description: receipt.description,
+          amount: Number(receipt.amount),
+          currency: receipt.currency,
+          paidDate: receipt.paidDate,
+          notes: receipt.notes || '',
+        })),
+      },
+    });
+  } catch (error) {
+    console.error('Receipts list error:', error);
+    return res.status(500).json({ success: false, message: 'Unable to load receipts' });
   }
 };

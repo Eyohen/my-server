@@ -47,6 +47,11 @@ module.exports = (sequelize, DataTypes) => {
       type: DataTypes.ENUM('active', 'inactive', 'suspended', 'pending_verification'),
       defaultValue: 'pending_verification'
     },
+    subscriptionPlan: {
+      type: DataTypes.STRING(40),
+      allowNull: false,
+      defaultValue: 'Hobby'
+    },
     onboardingCompleted: {
       type: DataTypes.BOOLEAN,
       defaultValue: false

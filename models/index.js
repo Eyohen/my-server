@@ -12,6 +12,7 @@ const activeModelFiles = [
   'businessProfile.js',
   'admin.js',
   'invoice.js',
+  'receipt.js',
 ];
 
 let sequelize;

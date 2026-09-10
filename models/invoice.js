@@ -52,6 +52,15 @@ module.exports = (sequelize, DataTypes) => {
     notes: {
       type: DataTypes.TEXT,
       allowNull: true
+    },
+    lineItems: {
+      type: DataTypes.JSONB,
+      allowNull: true
+    },
+    taxRate: {
+      type: DataTypes.DECIMAL(7, 4),
+      allowNull: false,
+      defaultValue: 0
     }
   }, {
     tableName: 'Invoices',
@@ -67,6 +76,10 @@ module.exports = (sequelize, DataTypes) => {
     Invoice.belongsTo(models.User, {
       foreignKey: 'userId',
       as: 'user'
+    });
+    Invoice.hasOne(models.Receipt, {
+      foreignKey: 'sourceInvoiceId',
+      as: 'receipt'
     });
   };
 

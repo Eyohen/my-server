@@ -152,6 +152,7 @@ exports.getUsers = async (req, res) => {
             phone: profile?.phone || businessProfile?.phone || '',
             workspace: businessProfile?.businessName || profile?.displayName || `${name}'s workspace`,
             userType: user.userType,
+            subscriptionPlan: user.subscriptionPlan || 'Hobby',
             status: user.status,
             verified: user.verified,
             onboardingCompleted: user.onboardingCompleted,
@@ -166,5 +167,23 @@ exports.getUsers = async (req, res) => {
       success: false,
       message: 'Unable to fetch users',
     });
+  }
+};
+
+exports.updateUserStatus = async (req, res) => {
+  try {
+    const status = req.body.status;
+    if (!['active', 'inactive'].includes(status)) {
+      return res.status(400).json({ success: false, message: 'Status must be active or inactive' });
+    }
+
+    const user = await User.findByPk(req.params.id);
+    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+    await user.update({ status });
+    return res.json({ success: true, message: status === 'inactive' ? 'Account deactivated' : 'Account activated', data: { status } });
+  } catch (error) {
+    console.error('Admin user status update error:', error);
+    return res.status(500).json({ success: false, message: 'Unable to update account status' });
   }
 };

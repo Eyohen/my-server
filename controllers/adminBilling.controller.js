@@ -1,7 +1,7 @@
 const db = require('../models');
 const emailService = require('../services/email.service');
 
-const { Invoice, User, PersonalProfile } = db;
+const { Invoice, Receipt, User, PersonalProfile, BusinessProfile } = db;
 const { Op } = db.Sequelize;
 
 const allowedStatuses = new Set(['draft', 'open', 'paid', 'overdue', 'void']);
@@ -34,10 +34,22 @@ const formatDocumentDate = (value) => {
   return Number.isNaN(date.getTime()) ? escapeHtml(value) : date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 };
 
-const formatInvoice = (invoice) => {
+const parseLineItems = (value) => {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== 'string') return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+};
+
+const formatInvoice = (invoice, receiptSent = Boolean(invoice.receipt)) => {
   const user = invoice.user;
   const profile = user?.personalProfile;
-  const customerName = [profile?.firstName, profile?.lastName].filter(Boolean).join(' ') || user?.email || '';
+  const businessProfile = user?.businessProfile;
+  const customerName = businessProfile?.businessName || [profile?.firstName, profile?.lastName].filter(Boolean).join(' ') || user?.email || '';
 
   return {
     id: invoice.id,
@@ -52,6 +64,9 @@ const formatInvoice = (invoice) => {
     issuedDate: invoice.issuedDate,
     dueDate: invoice.dueDate,
     notes: invoice.notes || '',
+    lineItems: parseLineItems(invoice.lineItems),
+    taxRate: Number(invoice.taxRate || 0),
+    receiptSent,
     createdAt: invoice.createdAt,
     updatedAt: invoice.updatedAt,
   };
@@ -69,7 +84,19 @@ const getInvoiceInclude = () => [
         required: false,
         attributes: ['firstName', 'lastName', 'displayName', 'phone'],
       },
+      {
+        model: BusinessProfile,
+        as: 'businessProfile',
+        required: false,
+        attributes: ['businessName', 'contactName', 'phone'],
+      },
     ],
+  },
+  {
+    model: Receipt,
+    as: 'receipt',
+    required: false,
+    attributes: ['id'],
   },
 ];
 
@@ -91,6 +118,31 @@ const buildInvoiceNumber = async (offset = 1) => {
   }, 0);
 
   return `${prefix}${String(highestSerial + offset).padStart(5, '0')}`;
+};
+
+const buildAvailableDocumentNumber = async (type, requestedNumber) => {
+  const model = type === 'invoice' ? Invoice : Receipt;
+  const field = type === 'invoice' ? 'invoiceNumber' : 'receiptNumber';
+  const requested = requestedNumber.trim();
+
+  if (!await model.findOne({ where: { [field]: requested } })) return requested;
+
+  if (type === 'invoice') {
+    // The normal SPI numbers are sequential. buildInvoiceNumber reads the current
+    // maximum, while this loop also handles gaps/races left by older data.
+    for (let offset = 1; offset <= 100; offset += 1) {
+      const candidate = await buildInvoiceNumber(offset);
+      if (!await Invoice.findOne({ where: { invoiceNumber: candidate } })) return candidate;
+    }
+  }
+
+  for (let suffix = 2; suffix <= 1000; suffix += 1) {
+    const suffixText = `-${suffix}`;
+    const candidate = `${requested.slice(0, 40 - suffixText.length)}${suffixText}`;
+    if (!await model.findOne({ where: { [field]: candidate } })) return candidate;
+  }
+
+  throw new Error(`Unable to allocate a unique ${type} number`);
 };
 
 const validateInvoiceInput = ({ userId, title, amount, status }) => {
@@ -199,6 +251,52 @@ exports.listInvoices = async (req, res) => {
       success: false,
       message: 'Unable to fetch invoices',
     });
+  }
+};
+
+exports.listReceipts = async (req, res) => {
+  try {
+    const receipts = await Receipt.findAll({
+      order: [['paidDate', 'DESC'], ['createdAt', 'DESC']],
+    });
+
+    return res.json({
+      success: true,
+      data: {
+        receipts: receipts.map((receipt) => ({
+          id: receipt.id,
+          receiptNumber: receipt.receiptNumber,
+          sourceInvoiceId: receipt.sourceInvoiceId,
+          customerName: receipt.customerName,
+          customerEmail: receipt.customerEmail,
+          description: receipt.description,
+          amount: Number(receipt.amount),
+          currency: receipt.currency,
+          paidDate: receipt.paidDate,
+          notes: receipt.notes || '',
+        })),
+      },
+    });
+  } catch (error) {
+    console.error('Admin receipts fetch error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Unable to fetch receipts',
+    });
+  }
+};
+
+exports.getNextDocumentNumber = async (req, res) => {
+  try {
+    const type = req.query.type === 'receipt' ? 'receipt' : 'invoice';
+    const year = new Date().getFullYear();
+    const requested = type === 'invoice' ? `SPI-${year}-00001` : `RCT-${year}-00001`;
+    const documentNumber = await buildAvailableDocumentNumber(type, requested);
+
+    return res.json({ success: true, data: { documentNumber } });
+  } catch (error) {
+    console.error('Next document number error:', error);
+    return res.status(500).json({ success: false, message: 'Unable to generate a document number' });
   }
 };
 
@@ -353,8 +451,8 @@ exports.sendDocument = async (req, res) => {
   try {
     const {
       type,
-      recipientName,
-      recipientEmail,
+      recipientUserId,
+      sourceInvoiceId,
       documentNumber,
       issueDate,
       dueDate,
@@ -367,11 +465,8 @@ exports.sendDocument = async (req, res) => {
     if (!['invoice', 'receipt'].includes(type)) {
       return res.status(400).json({ success: false, message: 'Document type must be invoice or receipt' });
     }
-    if (!recipientName?.trim()) {
-      return res.status(400).json({ success: false, message: 'Recipient name is required' });
-    }
-    if (!/^\S+@\S+\.\S+$/.test(recipientEmail || '')) {
-      return res.status(400).json({ success: false, message: 'A valid recipient email is required' });
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(recipientUserId || '')) {
+      return res.status(400).json({ success: false, message: 'Select a recipient from the customer accounts' });
     }
     if (!documentNumber?.trim()) {
       return res.status(400).json({ success: false, message: 'Document number is required' });
@@ -379,12 +474,88 @@ exports.sendDocument = async (req, res) => {
     if (!Array.isArray(items) || items.length === 0 || items.some((item) => !billableServices.has(item.description) || Number(item.quantity) <= 0 || Number(item.rate) < 0)) {
       return res.status(400).json({ success: false, message: 'Every line item needs a valid service, positive quantity, and valid rate' });
     }
+    if (type === 'receipt' && sourceInvoiceId) {
+      const sourceInvoice = await Invoice.findOne({ where: { id: sourceInvoiceId, userId: recipientUserId } });
+      if (!sourceInvoice) return res.status(400).json({ success: false, message: 'The source invoice is invalid' });
+    }
+
+    const recipient = await User.findByPk(recipientUserId, {
+      attributes: ['id', 'email'],
+      include: [
+        {
+          model: PersonalProfile,
+          as: 'personalProfile',
+          required: false,
+          attributes: ['firstName', 'lastName', 'displayName'],
+        },
+        {
+          model: BusinessProfile,
+          as: 'businessProfile',
+          required: false,
+          attributes: ['businessName', 'contactName'],
+        },
+      ],
+    });
+
+    if (!recipient) {
+      return res.status(400).json({ success: false, message: 'The selected customer account no longer exists' });
+    }
+
+    const personalName = [recipient.personalProfile?.firstName, recipient.personalProfile?.lastName].filter(Boolean).join(' ');
+    const recipientName = recipient.businessProfile?.businessName || personalName || recipient.personalProfile?.displayName || recipient.email;
+    const recipientEmail = recipient.email;
 
     const normalizedCurrency = String(currency || 'USD').toUpperCase().slice(0, 3);
     const subtotal = items.reduce((sum, item) => sum + Number(item.quantity) * Number(item.rate), 0);
     const tax = subtotal * (Math.max(0, Number(taxRate) || 0) / 100);
     const total = subtotal + tax;
     const label = type === 'invoice' ? 'Invoice' : 'Receipt';
+    let resolvedDocumentNumber = await buildAvailableDocumentNumber(type, documentNumber);
+    const itemSummary = items.length === 1
+      ? items[0].description
+      : `${items[0].description} + ${items.length - 1} more`;
+    let savedInvoice = null;
+    let savedReceipt = null;
+
+    // Reserve the number in billing before sending so the unique database index
+    // remains the final authority when multiple admins submit concurrently.
+    for (let attempt = 1; attempt <= 10; attempt += 1) {
+      try {
+        if (type === 'invoice') {
+          savedInvoice = await Invoice.create({
+            invoiceNumber: resolvedDocumentNumber,
+            userId: recipient.id,
+            title: itemSummary.slice(0, 180),
+            amount: total.toFixed(2),
+            currency: normalizedCurrency,
+            status: 'open',
+            issuedDate: issueDate || new Date().toISOString().slice(0, 10),
+            dueDate: dueDate || null,
+            notes: notes?.trim() || null,
+            lineItems: items.map(({ description, quantity, rate }) => ({ description, quantity: Number(quantity), rate: Number(rate) })),
+            taxRate: Math.max(0, Number(taxRate) || 0),
+          });
+        } else {
+          savedReceipt = await Receipt.create({
+            receiptNumber: resolvedDocumentNumber,
+            userId: recipient.id,
+            sourceInvoiceId: sourceInvoiceId || null,
+            customerName: recipientName.trim(),
+            customerEmail: recipientEmail.trim(),
+            description: itemSummary.slice(0, 180),
+            amount: total.toFixed(2),
+            currency: normalizedCurrency,
+            paidDate: dueDate || issueDate || new Date().toISOString().slice(0, 10),
+            notes: notes?.trim() || null,
+          });
+        }
+        break;
+      } catch (error) {
+        if (error.name !== 'SequelizeUniqueConstraintError' || attempt === 10) throw error;
+        resolvedDocumentNumber = await buildAvailableDocumentNumber(type, resolvedDocumentNumber);
+      }
+    }
+
     const lineItems = items.map((item) => `
       <tr>
         <td style="padding:12px 0;border-bottom:1px solid #eeeeee;font-size:12px;font-weight:500;color:#111111">${escapeHtml(item.description)}</td>
@@ -410,7 +581,7 @@ exports.sendDocument = async (req, res) => {
               <tr><td style="padding:20px;background:#f7f7f7;border-bottom:1px solid #e5e5e5">
                 <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
                   <tr>
-                    <td width="50%" valign="top" style="padding:0 12px 20px 0"><p style="margin:0;color:#9e9e9e;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px">${label} number</p><p style="margin:8px 0 0;color:#0a0a0a;font-size:12px;font-weight:700">${escapeHtml(documentNumber.trim())}</p></td>
+                    <td width="50%" valign="top" style="padding:0 12px 20px 0"><p style="margin:0;color:#9e9e9e;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px">${label} number</p><p style="margin:8px 0 0;color:#0a0a0a;font-size:12px;font-weight:700">${escapeHtml(resolvedDocumentNumber)}</p></td>
                     <td width="50%" valign="top" style="padding:0 0 20px 12px"><p style="margin:0;color:#9e9e9e;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:1px">Issued</p><p style="margin:8px 0 0;color:#0a0a0a;font-size:12px;font-weight:700">${formatDocumentDate(issueDate)}</p></td>
                   </tr>
                   <tr>
@@ -438,20 +609,42 @@ exports.sendDocument = async (req, res) => {
       </td></tr></table>
     </body></html>`;
 
-    const result = await emailService.sendEmail({
-      to: recipientEmail.trim(),
-      subject: `${label} ${documentNumber.trim()} from Spilight`,
-      html,
-      text: `${label} ${documentNumber.trim()} for ${recipientName.trim()}. ${type === 'invoice' ? 'Amount due' : 'Total paid'}: ${formatDocumentMoney(total, normalizedCurrency)}.`,
-    });
+    let result;
+    try {
+      result = await emailService.sendEmail({
+        to: recipientEmail.trim(),
+        subject: `${label} ${resolvedDocumentNumber} from Spilight`,
+        html,
+        text: `${label} ${resolvedDocumentNumber} for ${recipientName.trim()}. ${type === 'invoice' ? 'Amount due' : 'Total paid'}: ${formatDocumentMoney(total, normalizedCurrency)}.`,
+      });
+    } catch (error) {
+      await (savedInvoice || savedReceipt)?.destroy();
+      throw error;
+    }
 
     if (!result.success) {
+      await (savedInvoice || savedReceipt)?.destroy();
       return res.status(502).json({ success: false, message: result.error || `Unable to send ${type}` });
     }
 
-    return res.json({ success: true, message: `${label} sent to ${recipientEmail.trim()}` });
+    if (type === 'invoice') {
+      savedInvoice = await Invoice.findByPk(savedInvoice.id, { include: getInvoiceInclude() });
+    }
+
+    return res.json({
+      success: true,
+      message: `${label} sent to ${recipientEmail.trim()}${savedInvoice || savedReceipt ? ' and added to billing' : ''}`,
+      data: {
+        documentNumber: resolvedDocumentNumber,
+        ...(savedInvoice ? { invoice: formatInvoice(savedInvoice) } : {}),
+      },
+    });
   } catch (error) {
     console.error('Admin document send error:', error);
+    const isDuplicate = error.name === 'SequelizeUniqueConstraintError';
+    if (isDuplicate) {
+      return res.status(409).json({ success: false, message: `This ${req.body.type === 'receipt' ? 'receipt' : 'invoice'} number already exists in billing` });
+    }
     return res.status(500).json({ success: false, message: 'Unable to send document email' });
   }
 };
