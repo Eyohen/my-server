@@ -2,7 +2,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const db = require('../models');
 
-const { Admin, User, PersonalProfile, BusinessProfile } = db;
+const { Admin, User, PersonalProfile, BusinessProfile, CustomerWin } = db;
 const ACCESS_TOKEN_EXPIRY = '8h';
 
 const toPublicAdmin = (admin) => ({
@@ -104,6 +104,74 @@ exports.logout = async (req, res) => {
     success: true,
     message: 'Admin logged out',
   });
+};
+
+const toCustomerWin = (customerWin) => ({
+  id: customerWin.id,
+  name: customerWin.companyName,
+  contact: customerWin.contactName,
+  type: customerWin.winType,
+  useCase: customerWin.useCase,
+  paymentStatus: customerWin.paymentStatus,
+  state: customerWin.status,
+  celebratedAt: customerWin.celebratedAt,
+  createdAt: customerWin.createdAt,
+});
+
+exports.getCustomerWins = async (req, res) => {
+  try {
+    const customerWins = await CustomerWin.findAll({ order: [['createdAt', 'DESC']] });
+    return res.json({ success: true, data: { customerWins: customerWins.map(toCustomerWin) } });
+  } catch (error) {
+    console.error('Customer wins fetch error:', error);
+    return res.status(500).json({ success: false, message: 'Unable to fetch customer wins' });
+  }
+};
+
+exports.createCustomerWin = async (req, res) => {
+  try {
+    const companyName = req.body.companyName?.trim();
+    const contactName = req.body.contactName?.trim();
+    const useCase = req.body.useCase?.trim();
+    const winType = req.body.winType;
+    const paymentStatus = req.body.paymentStatus || 'confirmed';
+
+    if (!companyName || !contactName || !useCase) {
+      return res.status(400).json({ success: false, message: 'Company, account owner, and use case are required' });
+    }
+    if (!['subscription', 'service', 'both'].includes(winType)) {
+      return res.status(400).json({ success: false, message: 'Select a valid customer package' });
+    }
+    if (!['confirmed', 'pending'].includes(paymentStatus)) {
+      return res.status(400).json({ success: false, message: 'Select a valid payment status' });
+    }
+
+    const customerWin = await CustomerWin.create({
+      companyName,
+      contactName,
+      useCase,
+      winType,
+      paymentStatus,
+      createdByAdminId: req.admin.id,
+    });
+    return res.status(201).json({ success: true, message: 'Customer win recorded', data: { customerWin: toCustomerWin(customerWin) } });
+  } catch (error) {
+    console.error('Customer win create error:', error);
+    return res.status(500).json({ success: false, message: 'Unable to record customer win' });
+  }
+};
+
+exports.celebrateCustomerWin = async (req, res) => {
+  try {
+    const customerWin = await CustomerWin.findByPk(req.params.id);
+    if (!customerWin) return res.status(404).json({ success: false, message: 'Customer win not found' });
+
+    await customerWin.update({ status: 'celebrated', celebratedAt: new Date() });
+    return res.json({ success: true, message: 'Customer win celebrated', data: { customerWin: toCustomerWin(customerWin) } });
+  } catch (error) {
+    console.error('Customer win celebration error:', error);
+    return res.status(500).json({ success: false, message: 'Unable to complete celebration' });
+  }
 };
 
 exports.getUsers = async (req, res) => {

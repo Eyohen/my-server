@@ -67,6 +67,12 @@ module.exports = (sequelize, DataTypes) => {
         as: 'auditLogs'
       });
     }
+    if (models.CustomerWin) {
+      Admin.hasMany(models.CustomerWin, {
+        foreignKey: 'createdByAdminId',
+        as: 'customerWins'
+      });
+    }
   };
 
   return Admin;
